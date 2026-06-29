@@ -88,7 +88,7 @@ Extract every deal you can find. If a field is truly unknown, use null. Be thoro
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
+        max_tokens: 4000,
         system: systemPrompt,
         messages: [{ role: 'user', content: "Extract all won deals from this text:\n\n" + raw.substring(0, 12000) }]
       })
@@ -2294,7 +2294,7 @@ Extract every deal you can find. If a field is truly unknown, use null. Be thoro
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
+        max_tokens: 4000,
         system: systemPrompt,
         messages: [{ role: 'user', content: "Extract all won deals from this text:\n\n" + raw.substring(0, 12000) }]
       })
