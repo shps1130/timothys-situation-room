@@ -1,0 +1,2434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tim's Situation Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
+// ── WON DEALS UPLOADER ──
+function openWonDealsUploader() {
+  const overlay = document.getElementById('panel-overlay');
+  const panel = document.getElementById('panel-content');
+  overlay.classList.add('open');
+  panel.style.maxWidth = '720px';
+  panel.innerHTML = `
+    <button class="panel-close" onclick="closePanel(); document.getElementById('panel-content').style.maxWidth='';">✕ Close</button>
+    <div class="panel-title" style="color:#a569bd;">📁 Upload Won Deals</div>
+    <div class="panel-sub">CASE HISTORY // PATTERN LIBRARY</div>
+    <div style="padding:10px 12px; background:rgba(142,68,173,0.06); border:1px solid rgba(142,68,173,0.2); border-radius:3px; margin-bottom:16px; font-size:12px; color:var(--text-dim); line-height:1.6;">
+      Paste your Slack won deal announcements, CRM notes, email threads, or any unstructured deal history. The Detective will read everything and extract each deal automatically — org type, champion, what closed it, the breakthrough moment, and the sequence that worked.
+    </div>
+    <div class="form-group">
+      <label class="form-label">Paste won deal history (Slack, CRM notes, emails — any format)</label>
+      <textarea class="form-textarea" id="won-raw" style="min-height:220px; font-family:var(--mono); font-size:11px;" placeholder="Paste your Slack channel history, Salesforce export notes, email threads, or anything else here...
+
+The Detective can handle:
+• Multiple deals in one paste
+• Slack message format
+• CSV-style data  
+• Free-form notes
+• Mixed formats"></textarea>
+    </div>
+    <div id="won-extraction-area" style="display:none;">
+      <div style="border-top:1px solid #3d2e1a; margin:16px 0;"></div>
+      <div style="font-family:var(--mono);font-size:9px;color:#a569bd;letter-spacing:0.15em;margin-bottom:12px;">EXTRACTED DEALS — REVIEW BEFORE SAVING</div>
+      <div id="won-deals-preview"></div>
+    </div>
+    <div id="won-btn-row" class="btn-row">
+      <button class="btn-ghost" onclick="closePanel(); document.getElementById('panel-content').style.maxWidth='';">Cancel</button>
+      <button class="btn-primary" id="won-extract-btn" style="background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;" onclick="extractWonDeals()">Extract deals →</button>
+    </div>`;
+}
+
+async function extractWonDeals() {
+  const raw = document.getElementById('won-raw').value.trim();
+  if (!raw || raw.length < 50) return alert('Paste some deal history first.');
+
+  const btn = document.getElementById('won-extract-btn');
+  btn.textContent = 'Detective is reading...';
+  btn.disabled = true;
+
+  const systemPrompt = `You are The Detective — a sales intelligence analyst for Tim's Situation Room. Tim sells FreeWill, a planned giving platform for nonprofits and faith-based organizations.
+
+Extract ALL won deals from the text provided. Return ONLY a valid JSON array with no markdown, no explanation, just raw JSON.
+
+Each deal object must have these exact keys:
+{
+  "org_name": "Organization name",
+  "org_type": "large_church|mega_church|faith_nonprofit|christian_media|catholic|methodist|healthcare|animal_welfare|youth_org|other",
+  "org_size_category": "small|medium|large|enterprise",
+  "location_state": "state abbreviation or null",
+  "deal_length_days": number or null,
+  "total_touches": number or null,
+  "arr": number or null,
+  "lead_source": "cold_outreach|warm_intro|inbound|referral|event|re_engagement|other",
+  "mission_pressure_at_close": "What the org was trying to accomplish that made them buy",
+  "champion_role": "title/role of the champion who drove the deal internally",
+  "champion_strength": "strong|medium|weak",
+  "economic_buyer_role": "title/role of economic buyer",
+  "stakeholders_involved": ["list of roles/titles involved in decision"],
+  "primary_objection_overcome": "The main objection and how it was resolved, or null",
+  "breakthrough_moment": "The single thing that turned the deal — the key insight, case study, event, or conversation",
+  "breakthrough_channel": "email|call|meeting|referral|case_study|event|other",
+  "winning_sequence_description": "Brief description of what sequence of moves closed this deal",
+  "success_definition": "What success looked like to them — what outcome they were buying",
+  "decision_maker_fears": "What they were afraid of or trying to avoid",
+  "competitive_situation": "Were they ripping out a competitor? Which one? Or greenfield?",
+  "deal_notes": "Any other important context about why this deal closed",
+  "similarity_tags": ["tags like: replaced_crescendo, healthcare, large_org, cold_outreach, re_engagement, board_pressure, federated_deal, case_study_drove_close, etc"]
+}
+
+Extract every deal you can find. If a field is truly unknown, use null. Be thorough — every detail matters for pattern matching future deals.`;
+
+  try {
+    const response = await fetch('https://super-feather-7243.timothy-0ee.workers.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: "Extract all won deals from this text:\n\n" + raw.substring(0, 12000) }]
+      })
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || '[]';
+    let deals;
+    try {
+      deals = JSON.parse(text.replace(/```json|```/g, '').trim());
+      if (!Array.isArray(deals)) deals = [deals];
+    } catch(e) {
+      btn.textContent = 'Extract deals →';
+      btn.disabled = false;
+      return alert('Could not parse deals from that text. Try adding more context or structure.');
+    }
+
+    if (!deals.length) {
+      btn.textContent = 'Extract deals →';
+      btn.disabled = false;
+      return alert('No deals found. Make sure you pasted actual deal history.');
+    }
+
+    // Store extracted deals for saving
+    window._extractedWonDeals = deals;
+
+    // Render preview
+    const previewEl = document.getElementById('won-deals-preview');
+    previewEl.innerHTML = deals.map((d, i) => `
+      <div style="background:rgba(0,0,0,0.25); border:1px solid #3d2e1a; border-radius:3px; padding:14px; margin-bottom:12px; position:relative;">
+        <div style="position:absolute;top:10px;right:10px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="include-deal-${i}" checked style="accent-color:#a569bd;">
+            <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em;">INCLUDE</span>
+          </label>
+        </div>
+        <div style="font-family:var(--serif);font-size:16px;color:var(--paper);margin-bottom:6px;">${d.org_name}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          ${d.arr ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(39,174,96,0.15);color:#27ae60;border-radius:2px;">$${(d.arr/1000).toFixed(0)}k ARR</span>` : ''}
+          ${d.deal_length_days ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(243,156,18,0.1);color:#f39c12;border-radius:2px;">${d.deal_length_days} days</span>` : ''}
+          ${d.org_type ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(139,115,85,0.15);color:var(--text-dim);border-radius:2px;">${d.org_type.replace(/_/g,' ')}</span>` : ''}
+          ${d.lead_source ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(41,128,185,0.15);color:#5dade2;border-radius:2px;">${d.lead_source.replace(/_/g,' ')}</span>` : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
+          ${d.champion_role ? `<div><span style="color:var(--text-dim);">Champion: </span><span style="color:var(--paper);">${d.champion_role}</span></div>` : ''}
+          ${d.economic_buyer_role ? `<div><span style="color:var(--text-dim);">Economic buyer: </span><span style="color:var(--paper);">${d.economic_buyer_role}</span></div>` : ''}
+          ${d.competitive_situation ? `<div style="grid-column:span 2;"><span style="color:var(--text-dim);">Competitive: </span><span style="color:var(--paper);">${d.competitive_situation}</span></div>` : ''}
+        </div>
+        ${d.breakthrough_moment ? `
+          <div style="margin-top:8px;padding:8px 10px;background:rgba(243,156,18,0.06);border-left:2px solid var(--amber-dim);border-radius:0 2px 2px 0;">
+            <div style="font-family:var(--mono);font-size:8px;color:var(--amber-dim);letter-spacing:0.1em;margin-bottom:2px;">BREAKTHROUGH</div>
+            <div style="font-size:11px;color:var(--paper);">${d.breakthrough_moment}</div>
+          </div>` : ''}
+        ${d.primary_objection_overcome ? `
+          <div style="margin-top:6px;font-size:11px;"><span style="color:var(--text-dim);">Objection overcome: </span><span style="color:var(--paper);">${d.primary_objection_overcome}</span></div>` : ''}
+        ${d.similarity_tags?.length ? `
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;">
+            ${d.similarity_tags.map(t => `<span style="font-family:var(--mono);font-size:8px;padding:1px 5px;background:rgba(142,68,173,0.15);color:#a569bd;border-radius:2px;">${t}</span>`).join('')}
+          </div>` : ''}
+      </div>`).join('');
+
+    document.getElementById('won-extraction-area').style.display = 'block';
+
+    // Replace button row
+    document.getElementById('won-btn-row').innerHTML = `
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">${deals.length} deal${deals.length !== 1 ? 's' : ''} extracted</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-ghost" onclick="document.getElementById('won-raw').value=''; document.getElementById('won-extraction-area').style.display='none'; document.getElementById('won-btn-row').innerHTML = '<button class=\'btn-ghost\' onclick=\'closePanel()\'>Cancel</button><button class=\'btn-primary\' id=\'won-extract-btn\' style=\'background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;\' onclick=\'extractWonDeals()\'>Extract deals →</button>';">Paste more</button>
+        <button class="btn-primary" style="background:rgba(39,174,96,0.15);border-color:#1e8449;color:#27ae60;" onclick="saveWonDeals()">Save to pattern library →</button>
+      </div>`;
+
+  } catch(err) {
+    btn.textContent = 'Extract deals →';
+    btn.disabled = false;
+    console.error(err);
+    const errMsg = err?.message || String(err);
+    alert('Analysis error: ' + errMsg);
+    console.error('Full error:', err);
+  }
+}
+
+async function saveWonDeals() {
+  const deals = window._extractedWonDeals || [];
+  if (!deals.length) return;
+
+  const toSave = deals.filter((d, i) => {
+    const checkbox = document.getElementById(`include-deal-${i}`);
+    return checkbox ? checkbox.checked : true;
+  });
+
+  if (!toSave.length) return alert('No deals selected to save.');
+
+  const rows = toSave.map(d => ({
+    org_name: d.org_name,
+    org_type: d.org_type || null,
+    org_size_category: d.org_size_category || null,
+    location_state: d.location_state || null,
+    deal_length_days: d.deal_length_days || null,
+    total_touches: d.total_touches || null,
+    mission_pressure_at_close: d.mission_pressure_at_close || null,
+    champion_role: d.champion_role || null,
+    champion_strength: d.champion_strength || null,
+    economic_buyer_role: d.economic_buyer_role || null,
+    success_definition: d.success_definition || null,
+    primary_fear_addressed: d.decision_maker_fears || null,
+    primary_objection_overcome: d.primary_objection_overcome || null,
+    breakthrough_moment: d.breakthrough_moment || null,
+    breakthrough_channel: d.breakthrough_channel || null,
+    winning_sequence_description: d.winning_sequence_description || null,
+    raw_notes: d.deal_notes || null,
+    similarity_tags: d.similarity_tags || [],
+  }));
+
+  const { error } = await sb.from('won_deals').insert(rows);
+
+  if (error) {
+    console.error(error);
+    return alert('Error saving deals: ' + error.message);
+  }
+
+  const previewEl = document.getElementById('won-deals-preview');
+  previewEl.innerHTML = `
+    <div style="text-align:center;padding:30px 20px;">
+      <div style="font-family:var(--serif);font-size:22px;color:#27ae60;margin-bottom:8px;">✓ ${toSave.length} deal${toSave.length !== 1 ? 's' : ''} saved</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-bottom:20px;">Pattern library updated. The Detective can now match your active deals against this history.</div>
+      <button class="btn-ghost" onclick="closePanel(); document.getElementById('panel-content').style.maxWidth='';">Close</button>
+      <button class="btn-primary" style="margin-left:8px;background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;" onclick="document.getElementById('won-raw').value=''; document.getElementById('won-extraction-area').style.display='none'; document.getElementById('won-extract-btn') && (document.getElementById('won-extract-btn').textContent='Extract deals →') && (document.getElementById('won-extract-btn').disabled=false); openWonDealsUploader();">Upload more</button>
+    </div>`;
+
+  document.getElementById('won-btn-row').innerHTML = '';
+  window._extractedWonDeals = [];
+}
+
+
+</script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ink: #0f0e0c;
+    --paper: #f5f0e8;
+    --paper-dark: #ede6d6;
+    --board: #1a1208;
+    --board-mid: #241a0e;
+    --board-light: #2e2214;
+    --cork: #8b6914;
+    --string-red: #c0392b;
+    --string-dim: #7a1a10;
+    --pin-red: #e74c3c;
+    --pin-yellow: #f39c12;
+    --pin-green: #27ae60;
+    --amber: #f39c12;
+    --amber-dim: #b7770d;
+    --green: #27ae60;
+    --red: #c0392b;
+    --blue: #2980b9;
+    --text-dim: #8b7355;
+    --gap-critical: #e74c3c;
+    --gap-high: #e67e22;
+    --gap-medium: #f39c12;
+    --gap-low: #27ae60;
+    --mono: 'JetBrains Mono', monospace;
+    --serif: 'Special Elite', serif;
+    --sans: 'Inter Tight', sans-serif;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--board);
+    color: var(--paper);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+
+  /* ── LAYOUT ── */
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ── TOP BAR ── */
+  #topbar {
+    background: var(--board);
+    border-bottom: 1px solid #3d2e1a;
+    padding: 0 24px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    z-index: 100;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+  .logo {
+    font-family: var(--serif);
+    font-size: 18px;
+    color: var(--amber);
+    letter-spacing: 0.05em;
+    text-shadow: 0 0 20px rgba(243,156,18,0.3);
+  }
+  .logo span { color: var(--paper); opacity: 0.5; font-size: 14px; margin-left: 4px; }
+  .view-tabs { display: flex; gap: 4px; }
+  .view-tab {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 12px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--text-dim);
+    background: transparent;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .view-tab:hover { color: var(--paper); border-color: #3d2e1a; }
+  .view-tab.active { color: var(--amber); border-color: var(--amber-dim); background: rgba(243,156,18,0.08); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-text { font-family: var(--mono); font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; }
+
+  /* ── MAIN CONTENT ── */
+  #main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── PIPELINE VIEW ── */
+  #pipeline-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: none;
+  }
+  #pipeline-view.active { display: block; }
+  .pipeline-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .pipeline-title {
+    font-family: var(--serif);
+    font-size: 22px;
+    color: var(--amber);
+  }
+  .pipeline-meta { font-family: var(--mono); font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em; }
+  .deals-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  /* ── CASE FOLDER CARD ── */
+  .case-folder {
+    background: var(--paper);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    transition: transform 0.15s;
+    box-shadow: 3px 3px 0 rgba(0,0,0,0.4);
+  }
+  .case-folder:hover { transform: translateY(-2px); box-shadow: 4px 5px 0 rgba(0,0,0,0.5); }
+  .folder-tab {
+    height: 18px;
+    background: var(--paper-dark);
+    border-radius: 2px 2px 0 0;
+    width: 60%;
+    position: absolute;
+    top: -16px;
+    left: 0;
+  }
+  .folder-body { padding: 14px 16px; color: var(--ink); }
+  .folder-case-num {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: #8b7355;
+    letter-spacing: 0.15em;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+  .folder-org-name {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1208;
+    margin-bottom: 2px;
+    line-height: 1.2;
+  }
+  .folder-deal-name { font-size: 12px; color: #6b5a3e; margin-bottom: 10px; }
+  .folder-stats {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .folder-stat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: #5a4a32;
+  }
+  .folder-stat .val { font-weight: 500; color: #1a1208; }
+  .folder-divider { height: 1px; background: #d4c9b0; margin: 10px 0; }
+  .health-bar { display: flex; align-items: center; gap: 8px; }
+  .health-track { flex: 1; height: 3px; background: #d4c9b0; border-radius: 2px; }
+  .health-fill { height: 100%; border-radius: 2px; }
+  .health-label { font-family: var(--mono); font-size: 10px; font-weight: 500; }
+  .health-healthy .health-fill { background: #27ae60; width: 75%; }
+  .health-healthy .health-label { color: #27ae60; }
+  .health-at_risk .health-fill { background: #f39c12; width: 45%; }
+  .health-at_risk .health-label { color: #e67e22; }
+  .health-critical .health-fill { background: #e74c3c; width: 20%; }
+  .health-critical .health-label { color: #c0392b; }
+  .health-stalled .health-fill { background: #7f8c8d; width: 30%; }
+  .health-stalled .health-label { color: #7f8c8d; }
+  .gap-pin {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 2px;
+    margin-top: 8px;
+    background: #ffe8e8;
+    color: #c0392b;
+    border-left: 2px solid #c0392b;
+  }
+  .stage-badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    padding: 2px 7px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    background: #e8e0d0;
+    color: #5a4a32;
+    margin-bottom: 8px;
+  }
+
+  /* ── DETECTIVE BOARD VIEW ── */
+  #board-view {
+    flex: 1;
+    overflow: hidden;
+    display: none;
+    flex-direction: column;
+  }
+  #board-view.active { display: flex; }
+
+  /* Board header */
+  .board-header {
+    background: var(--board-mid);
+    border-bottom: 1px solid #3d2e1a;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .back-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px 8px;
+    border: 1px solid #3d2e1a;
+    border-radius: 2px;
+    background: transparent;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .back-btn:hover { color: var(--paper); border-color: var(--text-dim); }
+  .board-case-info { flex: 1; }
+  .board-case-num { font-family: var(--mono); font-size: 10px; color: var(--text-dim); letter-spacing: 0.15em; }
+  .board-case-name { font-family: var(--serif); font-size: 20px; color: var(--amber); margin-top: 1px; }
+  .board-stage {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 4px 10px;
+    border: 1px solid var(--amber-dim);
+    color: var(--amber);
+    border-radius: 2px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* Board canvas */
+  .board-canvas {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+  }
+
+  /* Board sections */
+  .board-sections {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: auto auto;
+    gap: 16px;
+    align-content: start;
+  }
+
+  .board-section {
+    background: var(--board-light);
+    border: 1px solid #3d2e1a;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .board-section::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .board-section.scene::before { background: var(--blue); }
+  .board-section.suspects::before { background: var(--red); }
+  .board-section.timeline::before { background: var(--amber); }
+  .board-section.casefile::before { background: var(--green); }
+  .board-section.analogous::before { background: #8e44ad; }
+  .board-section.leads::before { background: var(--string-red); }
+
+  .board-section:hover { border-color: #6b5a3e; transform: translateY(-1px); }
+  .board-section.span-2 { grid-column: span 2; }
+  .board-section.span-3 { grid-column: span 3; }
+
+  .section-header {
+    padding: 12px 14px 8px;
+    border-bottom: 1px solid #3d2e1a;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .section-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .section-title {
+    font-family: var(--serif);
+    font-size: 15px;
+    color: var(--paper);
+    margin-top: 2px;
+  }
+  .section-badge {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 2px;
+  }
+  .badge-unknown { background: rgba(139,115,85,0.2); color: var(--text-dim); border: 1px solid #3d2e1a; }
+  .badge-gap { background: rgba(231,76,60,0.15); color: #e74c3c; border: 1px solid rgba(231,76,60,0.3); }
+  .badge-ok { background: rgba(39,174,96,0.15); color: #27ae60; border: 1px solid rgba(39,174,96,0.3); }
+
+  .section-body { padding: 12px 14px; }
+  .section-preview { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+  .section-preview strong { color: var(--paper); font-weight: 500; }
+
+  /* Contact cards on the board */
+  .contact-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .contact-card {
+    background: var(--paper);
+    color: var(--ink);
+    border-radius: 2px;
+    padding: 8px 10px;
+    min-width: 120px;
+    position: relative;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.3);
+  }
+  .contact-pin {
+    position: absolute;
+    top: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .pin-champion { background: var(--green); box-shadow: 0 0 4px var(--green); }
+  .pin-economic_buyer { background: var(--blue); box-shadow: 0 0 4px var(--blue); }
+  .pin-blocker { background: var(--red); box-shadow: 0 0 4px var(--red); }
+  .pin-unknown { background: var(--amber); box-shadow: 0 0 4px var(--amber); }
+  .pin-placeholder { background: #7f8c8d; }
+  .contact-name { font-size: 11px; font-weight: 600; color: #1a1208; margin-top: 4px; }
+  .contact-title { font-size: 10px; color: #6b5a3e; }
+  .contact-role {
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-top: 4px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .role-champion { background: #d5f5e3; color: #1e8449; }
+  .role-economic_buyer { background: #d6eaf8; color: #1a5276; }
+  .role-blocker { background: #fdedec; color: #922b21; }
+  .role-unknown { background: #fef9e7; color: #7d6608; }
+  .role-placeholder { background: #f2f3f4; color: #566573; }
+
+  /* Timeline */
+  .timeline-strip { display: flex; flex-direction: column; gap: 8px; }
+  .timeline-item { display: flex; align-items: flex-start; gap: 10px; }
+  .timeline-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 4px;
+    flex-shrink: 0;
+  }
+  .dot-email { background: var(--blue); }
+  .dot-call { background: var(--green); }
+  .dot-gong { background: #8e44ad; }
+  .dot-proposal { background: var(--amber); }
+  .dot-linkedin { background: #2980b9; }
+  .timeline-content { flex: 1; }
+  .timeline-date { font-family: var(--mono); font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; }
+  .timeline-desc { font-size: 11px; color: var(--paper); margin-top: 1px; line-height: 1.4; }
+  .timeline-outcome {
+    font-family: var(--mono);
+    font-size: 9px;
+    margin-top: 2px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .outcome-positive { background: rgba(39,174,96,0.15); color: #27ae60; }
+  .outcome-neutral { background: rgba(139,115,85,0.15); color: var(--text-dim); }
+  .outcome-negative { background: rgba(192,57,43,0.15); color: #c0392b; }
+  .outcome-no_response { background: rgba(127,140,141,0.15); color: #7f8c8d; }
+
+  /* Open leads / gaps */
+  .gap-list { display: flex; flex-direction: column; gap: 6px; }
+  .gap-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 2px;
+    border-left: 3px solid transparent;
+    background: rgba(0,0,0,0.2);
+  }
+  .gap-critical-item { border-left-color: var(--gap-critical); }
+  .gap-high-item { border-left-color: var(--gap-high); }
+  .gap-medium-item { border-left-color: var(--gap-medium); }
+  .gap-low-item { border-left-color: var(--gap-low); }
+  .gap-severity {
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 1px 4px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .sev-critical { background: rgba(231,76,60,0.2); color: #e74c3c; }
+  .sev-high { background: rgba(230,126,34,0.2); color: #e67e22; }
+  .sev-medium { background: rgba(243,156,18,0.2); color: #f39c12; }
+  .sev-low { background: rgba(39,174,96,0.2); color: #27ae60; }
+  .gap-text { flex: 1; }
+  .gap-label-text { font-size: 12px; color: var(--paper); font-weight: 500; }
+  .gap-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+  .gap-action-btn {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 3px 8px;
+    border: 1px solid #3d2e1a;
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    transition: all 0.15s;
+    align-self: center;
+  }
+  .gap-action-btn:hover { color: var(--amber); border-color: var(--amber-dim); }
+
+  /* Five layers / case file */
+  .layers-grid { display: flex; flex-direction: column; gap: 8px; }
+  .layer-item {
+    padding: 8px 10px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 2px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .layer-status { flex-shrink: 0; margin-top: 2px; }
+  .layer-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .layer-dot-filled { background: var(--green); }
+  .layer-dot-partial { background: var(--amber); }
+  .layer-dot-empty { background: #3d2e1a; border: 1px solid #6b5a3e; }
+  .layer-content { flex: 1; }
+  .layer-name { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); }
+  .layer-value { font-size: 12px; color: var(--paper); margin-top: 3px; line-height: 1.5; }
+  .layer-empty { font-size: 12px; color: #4a3a28; font-style: italic; margin-top: 3px; }
+
+  /* News feed */
+  .news-list { display: flex; flex-direction: column; gap: 6px; }
+  .news-item {
+    padding: 8px 10px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 2px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .news-item:hover { background: rgba(0,0,0,0.35); }
+  .news-source { font-family: var(--mono); font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; }
+  .news-title { font-size: 12px; color: var(--paper); margin-top: 2px; line-height: 1.4; }
+  .news-relevance { font-size: 11px; color: var(--amber); margin-top: 3px; font-style: italic; }
+
+  /* Won deal match */
+  .match-card {
+    background: rgba(142,68,173,0.1);
+    border: 1px solid rgba(142,68,173,0.3);
+    border-radius: 3px;
+    padding: 10px 12px;
+  }
+  .match-org { font-size: 14px; font-weight: 600; color: var(--paper); }
+  .match-meta { font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 3px; }
+  .match-breakthrough {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #3d2e1a;
+    font-size: 12px;
+    color: var(--paper);
+    line-height: 1.5;
+  }
+  .match-breakthrough span { color: #8e44ad; font-weight: 500; }
+  .match-confidence {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 2px;
+    background: rgba(142,68,173,0.2);
+    color: #a569bd;
+    display: inline-block;
+    margin-top: 6px;
+  }
+
+  /* ── DETECTIVE CHAT ── */
+  #detective-chat {
+    width: 340px;
+    border-left: 1px solid #3d2e1a;
+    background: var(--board-mid);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .chat-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid #3d2e1a;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .detective-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(243,156,18,0.15);
+    border: 1px solid var(--amber-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--amber);
+    flex-shrink: 0;
+  }
+  .chat-title { font-family: var(--serif); font-size: 14px; color: var(--amber); }
+  .chat-subtitle { font-family: var(--mono); font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; margin-top: 1px; }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .chat-message { display: flex; flex-direction: column; gap: 4px; }
+  .msg-from { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .msg-from-detective { color: var(--amber); }
+  .msg-from-user { color: var(--text-dim); align-self: flex-end; }
+  .msg-bubble {
+    padding: 8px 12px;
+    border-radius: 3px;
+    font-size: 12px;
+    line-height: 1.6;
+    max-width: 90%;
+  }
+  .msg-detective-bubble {
+    background: rgba(243,156,18,0.08);
+    border: 1px solid rgba(243,156,18,0.15);
+    color: var(--paper);
+    border-radius: 0 3px 3px 3px;
+    align-self: flex-start;
+  }
+  .msg-user-bubble {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid #3d2e1a;
+    color: var(--paper);
+    border-radius: 3px 0 3px 3px;
+    align-self: flex-end;
+  }
+  .msg-thinking {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 8px 12px;
+  }
+  .thinking-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--amber);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes pulse {
+    0%, 60%, 100% { opacity: 0.2; transform: scale(0.8); }
+    30% { opacity: 1; transform: scale(1); }
+  }
+
+  /* Quick prompts */
+  .quick-prompts {
+    padding: 8px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    border-top: 1px solid #3d2e1a;
+  }
+  .quick-prompt {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 4px 8px;
+    border: 1px solid #3d2e1a;
+    border-radius: 2px;
+    color: var(--text-dim);
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    background: transparent;
+    transition: all 0.15s;
+  }
+  .quick-prompt:hover { color: var(--amber); border-color: var(--amber-dim); }
+
+  /* Chat input */
+  .chat-input-area {
+    padding: 12px 16px;
+    border-top: 1px solid #3d2e1a;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .chat-input {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid #3d2e1a;
+    border-radius: 3px;
+    color: var(--paper);
+    font-family: var(--sans);
+    font-size: 12px;
+    padding: 8px 10px;
+    resize: none;
+    min-height: 36px;
+    max-height: 100px;
+    line-height: 1.4;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .chat-input:focus { border-color: var(--amber-dim); }
+  .chat-input::placeholder { color: #4a3a28; }
+  .send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 3px;
+    background: rgba(243,156,18,0.15);
+    border: 1px solid var(--amber-dim);
+    color: var(--amber);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .send-btn:hover { background: rgba(243,156,18,0.25); }
+
+  /* ── MODAL / PANEL ── */
+  #panel-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10,8,4,0.8);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #panel-overlay.open { display: flex; }
+  .panel {
+    background: var(--board-light);
+    border: 1px solid #3d2e1a;
+    border-radius: 4px;
+    width: 640px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 24px;
+  }
+  .panel-title { font-family: var(--serif); font-size: 20px; color: var(--amber); margin-bottom: 4px; }
+  .panel-sub { font-family: var(--mono); font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; margin-bottom: 20px; }
+  .panel-close {
+    float: right;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px 8px;
+    border: 1px solid #3d2e1a;
+    border-radius: 2px;
+    background: transparent;
+    letter-spacing: 0.1em;
+  }
+  .panel-close:hover { color: var(--paper); }
+
+  /* Form elements */
+  .form-group { margin-bottom: 16px; }
+  .form-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; display: block; }
+  .form-input, .form-textarea, .form-select {
+    width: 100%;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid #3d2e1a;
+    border-radius: 3px;
+    color: var(--paper);
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .form-input:focus, .form-textarea:focus, .form-select:focus { border-color: var(--amber-dim); }
+  .form-textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+  .form-select option { background: var(--board); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .btn-primary {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 8px 20px;
+    background: rgba(243,156,18,0.15);
+    border: 1px solid var(--amber-dim);
+    color: var(--amber);
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .btn-primary:hover { background: rgba(243,156,18,0.25); }
+  .btn-ghost {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 8px 16px;
+    background: transparent;
+    border: 1px solid #3d2e1a;
+    color: var(--text-dim);
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .btn-ghost:hover { color: var(--paper); border-color: #6b5a3e; }
+  .btn-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3d2e1a; border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: #6b5a3e; }
+
+  /* Loading state */
+  .loading-screen {
+    position: fixed;
+    inset: 0;
+    background: var(--board);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    z-index: 999;
+  }
+  .loading-logo { font-family: var(--serif); font-size: 32px; color: var(--amber); letter-spacing: 0.05em; }
+  .loading-sub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); letter-spacing: 0.2em; text-transform: uppercase; }
+  .loading-bar { width: 200px; height: 2px; background: #3d2e1a; border-radius: 1px; overflow: hidden; margin-top: 8px; }
+  .loading-fill { height: 100%; background: var(--amber); border-radius: 1px; animation: loading 1.5s ease-in-out infinite; }
+  @keyframes loading {
+    0% { width: 0%; margin-left: 0; }
+    50% { width: 60%; margin-left: 20%; }
+    100% { width: 0%; margin-left: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading screen -->
+<div class="loading-screen" id="loading">
+  <div class="loading-logo">Tim's Situation Room</div>
+  <div class="loading-sub">Accessing case files</div>
+  <div class="loading-bar"><div class="loading-fill"></div></div>
+</div>
+
+<div id="app" style="display:none;">
+
+  <!-- Top bar -->
+  <div id="topbar">
+    <div class="topbar-left">
+      <div class="logo">TSR <span>// Situation Room</span></div>
+      <div class="view-tabs">
+        <button class="view-tab active" onclick="showView('pipeline')">Pipeline</button>
+        <button class="view-tab" id="board-tab" onclick="showView('board')" style="display:none;">Case Board</button>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="status-dot"></div>
+      <div class="status-text">LIVE</div>
+      <button class="btn-ghost" style="font-size:10px; padding:4px 12px;" onclick="openPanel('new-deal')">+ New Case</button>
+      <button class="btn-ghost" style="font-size:10px; padding:4px 12px; color:#a569bd; border-color:#6c3483;" onclick="openWonDealsUploader()">📁 Upload won deals</button>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div id="main">
+
+    <!-- Pipeline view -->
+    <div id="pipeline-view" class="active">
+      <div class="pipeline-header">
+        <div>
+          <div class="pipeline-title">Active Cases</div>
+          <div class="pipeline-meta" id="pipeline-meta">Loading cases...</div>
+        </div>
+        <button class="btn-ghost" style="font-size:10px; padding:5px 14px;" onclick="openPanel('new-deal')">Open new case</button>
+      </div>
+      <div class="deals-grid" id="deals-grid">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- Board view -->
+    <div id="board-view">
+      <div class="board-header">
+        <button class="back-btn" onclick="showView('pipeline')">← All Cases</button>
+        <div class="board-case-info">
+          <div class="board-case-num" id="board-case-num">CASE #—</div>
+          <div class="board-case-name" id="board-case-name">—</div>
+        </div>
+        <div class="board-stage" id="board-stage">—</div>
+        <button class="btn-ghost" style="font-size:10px; padding:5px 14px;" onclick="openPanel('log-touch')">+ Log touch</button>
+        <button class="btn-ghost" style="font-size:10px; padding:5px 14px;" onclick="openPanel('add-contact')">+ Add contact</button>
+        <button class="btn-primary" style="font-size:10px; padding:5px 14px; background:rgba(142,68,173,0.2); border-color:#6c3483; color:#a569bd;" onclick="openGongPanel()">🎙 Analyze transcript</button>
+      </div>
+
+      <div class="board-canvas">
+        <div class="board-sections" id="board-sections">
+
+          <!-- THE SCENE -->
+          <div class="board-section scene" onclick="openPanel('scene')">
+            <div class="section-header">
+              <div>
+                <div class="section-label">Section 01</div>
+                <div class="section-title">The Scene</div>
+              </div>
+              <div class="section-badge badge-unknown" id="scene-badge">Unknown</div>
+            </div>
+            <div class="section-body">
+              <div class="section-preview" id="scene-preview">
+                <strong>Org intel, mission pressure, financial signals.</strong><br>
+                Click to edit org profile and view news feed.
+              </div>
+            </div>
+          </div>
+
+          <!-- THE SUSPECTS -->
+          <div class="board-section suspects span-2">
+            <div class="section-header">
+              <div>
+                <div class="section-label">Section 02</div>
+                <div class="section-title">The Suspects</div>
+              </div>
+              <div class="section-badge badge-gap" id="suspects-badge">Gaps found</div>
+            </div>
+            <div class="section-body">
+              <div class="contact-grid" id="contacts-grid">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- THE TIMELINE -->
+          <div class="board-section timeline span-2">
+            <div class="section-header">
+              <div>
+                <div class="section-label">Section 03</div>
+                <div class="section-title">The Timeline</div>
+              </div>
+              <div class="section-badge badge-unknown" id="timeline-badge">0 touches</div>
+            </div>
+            <div class="section-body">
+              <div class="timeline-strip" id="timeline-strip">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- THE CASE FILE -->
+          <div class="board-section casefile">
+            <div class="section-header">
+              <div>
+                <div class="section-label">Section 04</div>
+                <div class="section-title">The Case File</div>
+              </div>
+              <div class="section-badge badge-gap" id="casefile-badge">Incomplete</div>
+            </div>
+            <div class="section-body">
+              <div class="layers-grid" id="layers-grid">
+                <!-- Populated by JS — each layer is individually clickable -->
+              </div>
+            </div>
+          </div>
+
+          <!-- ANALOGOUS CASES -->
+          <div class="board-section analogous">
+            <div class="section-header">
+              <div>
+                <div class="section-label">Section 05</div>
+                <div class="section-title">Analogous Cases</div>
+              </div>
+              <div class="section-badge badge-unknown" id="analogous-badge">No match</div>
+            </div>
+            <div class="section-body" id="analogous-body">
+              <div class="section-preview">No won deal matched yet. Upload case history or ask the Detective to find a match.</div>
+            </div>
+          </div>
+
+          <!-- OPEN LEADS -->
+          <div class="board-section leads span-3">
+            <div class="section-header">
+              <div>
+                <div class="section-label">Section 06 — Open Leads</div>
+                <div class="section-title">What We Don't Know Yet</div>
+              </div>
+              <div class="section-badge badge-gap" id="leads-badge">0 open</div>
+            </div>
+            <div class="section-body">
+              <div class="gap-list" id="gap-list">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Detective Chat -->
+        <div id="detective-chat">
+          <div class="chat-header">
+            <div class="detective-avatar">🔍</div>
+            <div>
+              <div class="chat-title">The Detective</div>
+              <div class="chat-subtitle">Ask anything about this case</div>
+            </div>
+          </div>
+          <div class="chat-messages" id="chat-messages">
+            <div class="chat-message">
+              <div class="msg-from msg-from-detective">Detective</div>
+              <div class="msg-bubble msg-detective-bubble">
+                Case file loaded. I've analyzed the available intelligence. Ask me what's missing, what the next move should be, or have me build a sequence for any gap you see on the board.
+              </div>
+            </div>
+          </div>
+          <div class="quick-prompts" id="quick-prompts">
+            <button class="quick-prompt" onclick="sendQuickPrompt(this)">What's missing?</button>
+            <button class="quick-prompt" onclick="sendQuickPrompt(this)">Who is our champion?</button>
+            <button class="quick-prompt" onclick="sendQuickPrompt(this)">Build a CFO sequence</button>
+            <button class="quick-prompt" onclick="sendQuickPrompt(this)">Why is this stalled?</button>
+            <button class="quick-prompt" onclick="sendQuickPrompt(this)">Analogous won deal?</button>
+          </div>
+          <div class="chat-input-area">
+            <textarea class="chat-input" id="chat-input" placeholder="Ask the detective..." rows="1" onkeydown="handleChatKey(event)"></textarea>
+            <button class="send-btn" onclick="sendMessage()">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Panel overlay -->
+<div id="panel-overlay" onclick="closePanelOnOverlay(event)">
+  <div class="panel" id="panel-content">
+    <!-- Populated by JS -->
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://pvnhgifvmsndpkhqueuu.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2bmhnaWZ2bXNuZHBraHF1ZXV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3NTQ3MzcsImV4cCI6MjA5ODMzMDczN30.4j0wKwZ9dguGl6zPpRJa4oaZm-BlNTrvlWKjQXR2haM';
+
+let sb;
+let currentDeal = null;
+let currentDealData = {};
+let chatHistory = [];
+
+// ── INIT ──
+window.addEventListener('load', async () => {
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  await loadPipeline();
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+});
+
+// ── PIPELINE ──
+async function loadPipeline() {
+  const { data: deals } = await sb
+    .from('deals')
+    .select('*, orgs(*), contacts(*), gaps(*)')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false });
+
+  const grid = document.getElementById('deals-grid');
+  const meta = document.getElementById('pipeline-meta');
+
+  if (!deals || deals.length === 0) {
+    grid.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:60px 20px;">
+      <div style="font-family:var(--serif); font-size:22px; color:var(--text-dim); margin-bottom:12px;">No cases open</div>
+      <div style="font-family:var(--mono); font-size:11px; color:#4a3a28; margin-bottom:20px;">Open your first case to begin the investigation</div>
+      <button class="btn-primary" onclick="openPanel('new-deal')">Open first case</button>
+    </div>`;
+    meta.textContent = '0 active cases';
+    return;
+  }
+
+  meta.textContent = `${deals.length} active cases · ${deals.filter(d => d.health_label === 'critical').length} critical`;
+
+  grid.innerHTML = deals.map((deal, i) => {
+    const org = deal.orgs || {};
+    const contacts = deal.contacts || [];
+    const gaps = (deal.gaps || []).filter(g => g.status === 'open');
+    const criticalGap = gaps.find(g => g.severity === 'critical') || gaps[0];
+    const daysSince = deal.days_since_last_touch || 0;
+    const health = deal.health_label || 'unknown';
+
+    return `<div class="case-folder" onclick="openCase('${deal.id}')" style="margin-top:16px;">
+      <div class="folder-tab"></div>
+      <div class="folder-body">
+        <div class="folder-case-num">CASE-${String(i+1).padStart(3,'0')}</div>
+        <div class="folder-org-name">${org.name || deal.deal_name}</div>
+        <div class="folder-deal-name">${deal.deal_name}</div>
+        <div class="stage-badge">${(deal.stage || 'prospecting').replace('_', ' ')}</div>
+        <div class="folder-stats">
+          <div class="folder-stat">Touches: <span class="val">${deal.total_touches || 0}</span></div>
+          <div class="folder-stat">Last: <span class="val">${daysSince > 0 ? daysSince + 'd ago' : 'Today'}</span></div>
+          <div class="folder-stat">Contacts: <span class="val">${contacts.length}</span></div>
+          ${deal.arr_estimate ? `<div class="folder-stat">ARR: <span class="val">$${(deal.arr_estimate/1000).toFixed(0)}k</span></div>` : ''}
+        </div>
+        <div class="folder-divider"></div>
+        <div class="health-bar health-${health}">
+          <div class="health-track"><div class="health-fill"></div></div>
+          <div class="health-label">${health.replace('_',' ')}</div>
+        </div>
+        ${criticalGap ? `<div class="gap-pin">⚑ ${criticalGap.gap_label}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── OPEN CASE (BOARD VIEW) ──
+async function openCase(dealId) {
+  const { data: deal } = await sb
+    .from('deals')
+    .select('*, orgs(*)')
+    .eq('id', dealId)
+    .single();
+
+  const { data: contacts } = await sb
+    .from('contacts')
+    .select('*')
+    .eq('deal_id', dealId)
+    .order('created_at');
+
+  const { data: interactions } = await sb
+    .from('interactions')
+    .select('*')
+    .eq('deal_id', dealId)
+    .order('occurred_at', { ascending: false })
+    .limit(8);
+
+  const { data: gaps } = await sb
+    .from('gaps')
+    .select('*')
+    .eq('deal_id', dealId)
+    .eq('status', 'open')
+    .order('severity');
+
+  const { data: news } = await sb
+    .from('news_items')
+    .select('*')
+    .eq('org_id', deal.org_id)
+    .order('published_at', { ascending: false })
+    .limit(4);
+
+  currentDeal = deal;
+  currentDealData = { contacts: contacts || [], interactions: interactions || [], gaps: gaps || [], news: news || [] };
+
+  // Header
+  document.getElementById('board-case-num').textContent = `CASE // ${(deal.orgs?.name || deal.deal_name).toUpperCase()}`;
+  document.getElementById('board-case-name').textContent = deal.deal_name;
+  document.getElementById('board-stage').textContent = (deal.stage || 'prospecting').replace(/_/g, ' ').toUpperCase();
+
+  // Scene
+  const org = deal.orgs || {};
+  document.getElementById('scene-preview').innerHTML = `
+    <strong>${org.name || '—'}</strong> · ${org.location_city || ''}${org.location_state ? ', ' + org.location_state : ''}<br>
+    <span style="color:var(--paper); margin-top:4px; display:block;">${org.mission_pressure || 'Mission pressure unknown — research needed'}</span>
+    ${news && news.length > 0 ? `<span style="color:var(--amber-dim); font-size:11px; margin-top:4px; display:block;">📰 ${news.length} recent news items</span>` : ''}
+  `;
+  document.getElementById('scene-badge').textContent = org.mission_pressure ? 'Profiled' : 'Unknown';
+  document.getElementById('scene-badge').className = `section-badge ${org.mission_pressure ? 'badge-ok' : 'badge-gap'}`;
+
+  // Contacts/Suspects
+  const contactsGrid = document.getElementById('contacts-grid');
+  const hasChampion = (contacts || []).some(c => c.deal_role === 'champion');
+  const hasEconBuyer = (contacts || []).some(c => c.deal_role === 'economic_buyer');
+
+  let contactsHtml = (contacts || []).map(c => {
+    const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.placeholder_description || 'Unknown';
+    return `<div class="contact-card" onclick="event.stopPropagation(); openEditContact('${c.id}')" title="Click to edit">
+      <div class="contact-pin pin-${c.deal_role || 'unknown'}"></div>
+      <div class="contact-name">${name}</div>
+      <div class="contact-title">${c.title || '—'}</div>
+      <div class="contact-role role-${c.deal_role || 'unknown'}">${(c.deal_role || 'unknown').replace('_',' ')}</div>
+      <div style="font-family:var(--mono);font-size:8px;color:#8b6914;margin-top:4px;">✎ edit</div>
+    </div>`;
+  }).join('');
+
+  if (!hasChampion) contactsHtml += `<div class="contact-card" style="border:1px dashed #6b5a3e; background:transparent; display:flex; align-items:center; justify-content:center; min-height:70px;">
+    <div style="text-align:center;"><div class="contact-role role-unknown" style="margin:0 auto;">Champion needed</div></div>
+  </div>`;
+  if (!hasEconBuyer) contactsHtml += `<div class="contact-card" style="border:1px dashed #6b5a3e; background:transparent; display:flex; align-items:center; justify-content:center; min-height:70px;">
+    <div style="text-align:center;"><div class="contact-role role-unknown" style="margin:0 auto;">Econ buyer needed</div></div>
+  </div>`;
+
+  contactsGrid.innerHTML = contactsHtml;
+  document.getElementById('suspects-badge').textContent = (!hasChampion || !hasEconBuyer) ? 'Gaps found' : 'Mapped';
+  document.getElementById('suspects-badge').className = `section-badge ${(!hasChampion || !hasEconBuyer) ? 'badge-gap' : 'badge-ok'}`;
+
+  // Timeline
+  const timelineStrip = document.getElementById('timeline-strip');
+  document.getElementById('timeline-badge').textContent = `${deal.total_touches || 0} touches`;
+  if (!interactions || interactions.length === 0) {
+    timelineStrip.innerHTML = `<div class="section-preview">No touches logged yet. Log your first interaction to begin the timeline.</div>`;
+  } else {
+    timelineStrip.innerHTML = interactions.map(i => {
+      const date = new Date(i.occurred_at).toLocaleDateString('en-US', { month:'short', day:'numeric' });
+      return `<div class="timeline-item">
+        <div class="timeline-dot dot-${i.channel || 'call'}"></div>
+        <div class="timeline-content">
+          <div class="timeline-date">${date} · ${(i.channel || '').replace('_',' ').toUpperCase()}</div>
+          <div class="timeline-desc">${i.ai_summary || i.subject || 'Touch logged'}</div>
+          ${i.outcome ? `<div class="timeline-outcome outcome-${i.outcome}">${i.outcome.replace('_',' ')}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Case file (5 layers)
+  const layersGrid = document.getElementById('layers-grid');
+  const layerDefs = [
+    { key: 'deal_mission_context', name: 'Mission pressure', value: deal.deal_mission_context, placeholder: 'What is this org trying to accomplish right now? What burning platform are they on?' },
+    { key: 'buying_process_notes', name: 'Buying process', value: deal.buying_process_notes, placeholder: 'How do they actually make decisions? Who needs to sign off? Does a committee meet? How often?' },
+    { key: null, name: 'People map', value: contacts && contacts.length > 0 ? `${contacts.length} contacts mapped` : null, placeholder: null },
+    { key: 'success_definition', name: 'Success definition', value: deal.success_definition, placeholder: 'What does winning look like specifically for FreeWill? What measurable outcome have they articulated?' },
+    { key: 'decision_maker_fears', name: 'Fear map', value: deal.decision_maker_fears, placeholder: "What keeps the decision maker up at night? Giving is down? Losing Boomer donors? Board pressure?" },
+  ];
+  const filledLayers = layerDefs.filter(l => l.value).length;
+  document.getElementById('casefile-badge').textContent = `${filledLayers}/5 complete`;
+  document.getElementById('casefile-badge').className = `section-badge ${filledLayers < 3 ? 'badge-gap' : filledLayers < 5 ? 'badge-unknown' : 'badge-ok'}`;
+  layersGrid.innerHTML = layerDefs.map(l => {
+    const clickable = l.key !== null;
+    return `<div class="layer-item" ${clickable ? `onclick="openEditLayer('${l.key}', '${l.name}', this)" style="cursor:pointer;" title="Click to edit"` : ''}>
+      <div class="layer-status"><div class="layer-dot ${l.value ? 'layer-dot-filled' : 'layer-dot-empty'}"></div></div>
+      <div class="layer-content">
+        <div class="layer-name">${l.name} ${clickable ? '<span style="color:#8b6914;font-size:9px;">✎</span>' : ''}</div>
+        ${l.value ? `<div class="layer-value">${l.value}</div>` : `<div class="layer-empty">${clickable ? 'Click to add intel' : 'Use contacts section'}</div>`}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Gaps
+  const gapList = document.getElementById('gap-list');
+  document.getElementById('leads-badge').textContent = `${(gaps||[]).length} open`;
+  if (!gaps || gaps.length === 0) {
+    gapList.innerHTML = `<div class="section-preview" style="padding:8px 0;">No open leads. Case is well-documented — or gaps haven't been generated yet.</div>`;
+  } else {
+    gapList.innerHTML = gaps.map(g => `<div class="gap-item gap-${g.severity}-item">
+      <div class="gap-severity sev-${g.severity}">${g.severity}</div>
+      <div class="gap-text">
+        <div class="gap-label-text">${g.gap_label}</div>
+        <div class="gap-desc">${g.gap_description || ''}</div>
+      </div>
+      <button class="gap-action-btn" onclick="event.stopPropagation(); askDetective('Build a sequence to address: ${g.gap_label}')">Build sequence →</button>
+    </div>`).join('');
+  }
+
+  // Reset chat
+  chatHistory = [];
+  document.getElementById('chat-messages').innerHTML = `
+    <div class="chat-message">
+      <div class="msg-from msg-from-detective">Detective</div>
+      <div class="msg-bubble msg-detective-bubble">
+        Case loaded: <strong>${deal.deal_name}</strong>.<br><br>
+        I see ${(contacts||[]).length} contacts mapped, ${(gaps||[]).length} open leads, and ${(interactions||[]).length} logged touches.<br><br>
+        ${(gaps||[]).length > 0 ? `Most critical gap: <strong>${gaps[0].gap_label}</strong>.` : 'No gaps flagged yet — ask me to analyze this case.'}<br><br>
+        What do you want to know?
+      </div>
+    </div>`;
+
+  showView('board');
+}
+
+// ── VIEWS ──
+function showView(view) {
+  document.getElementById('pipeline-view').className = view === 'pipeline' ? 'active' : '';
+  document.getElementById('board-view').className = view === 'board' ? 'active' : '';
+  document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+  if (view === 'pipeline') {
+    document.querySelector('.view-tab:first-child').classList.add('active');
+    document.getElementById('board-tab').style.display = 'none';
+  } else {
+    document.getElementById('board-tab').style.display = 'block';
+    document.getElementById('board-tab').classList.add('active');
+  }
+}
+
+// ── PANELS ──
+function openPanel(type) {
+  const overlay = document.getElementById('panel-overlay');
+  const content = document.getElementById('panel-content');
+  overlay.classList.add('open');
+
+  if (type === 'new-deal') {
+    content.innerHTML = `
+      <button class="panel-close" onclick="closePanel()">✕ Close</button>
+      <div class="panel-title">Open New Case</div>
+      <div class="panel-sub">CASE FILE INTAKE // SITUATION ROOM</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Organization name</label><input class="form-input" id="f-org-name" placeholder="e.g. Christian Broadcasting Network"></div>
+        <div class="form-group"><label class="form-label">Deal name</label><input class="form-input" id="f-deal-name" placeholder="e.g. CBN Planned Giving Platform"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Org type</label>
+          <select class="form-select" id="f-industry">
+            <option value="">Select type</option>
+            <option value="large_church">Large Church</option>
+            <option value="mega_church">Mega Church</option>
+            <option value="faith_nonprofit">Faith Nonprofit</option>
+            <option value="christian_media">Christian Media</option>
+            <option value="catholic">Catholic Institution</option>
+            <option value="methodist">Methodist</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Stage</label>
+          <select class="form-select" id="f-stage">
+            <option value="prospecting">Prospecting</option>
+            <option value="qualified">Qualified</option>
+            <option value="discovery">Discovery</option>
+            <option value="demo_scheduled">Demo scheduled</option>
+            <option value="proposal_sent">Proposal sent</option>
+            <option value="champion_development">Champion development</option>
+            <option value="stalled">Stalled</option>
+            <option value="negotiation">Negotiation</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Mission pressure (what is this org trying to accomplish right now?)</label>
+        <textarea class="form-textarea" id="f-mission" placeholder="e.g. CBN is trying to reach a donor base that has extended farther than human touches alone can reach..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Location (city, state)</label><input class="form-input" id="f-location" placeholder="Virginia Beach, VA"></div>
+        <div class="form-group"><label class="form-label">ARR estimate ($)</label><input class="form-input" id="f-arr" type="number" placeholder="25000"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+        <button class="btn-primary" onclick="saveNewDeal()">Open case →</button>
+      </div>`;
+  }
+
+  if (type === 'scene') {
+    const org = currentDeal?.orgs || {};
+    content.innerHTML = `
+      <button class="panel-close" onclick="closePanel()">✕ Close</button>
+      <div class="panel-title">The Scene</div>
+      <div class="panel-sub">ORG PROFILE // ${(org.name || '').toUpperCase()}</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Organization name</label><input class="form-input" id="sc-name" value="${org.name || ''}"></div>
+        <div class="form-group"><label class="form-label">Website</label><input class="form-input" id="sc-website" value="${org.website || ''}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">City</label><input class="form-input" id="sc-city" value="${org.location_city || ''}"></div>
+        <div class="form-group"><label class="form-label">State</label><input class="form-input" id="sc-state" value="${org.location_state || ''}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Mission pressure (what is this org trying to accomplish right now?)</label>
+        <textarea class="form-textarea" id="sc-mission">${org.mission_pressure || ''}</textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Giving trend</label>
+          <select class="form-select" id="sc-giving">
+            <option value="unknown" ${org.giving_trend==='unknown'||!org.giving_trend?'selected':''}>Unknown</option>
+            <option value="growing" ${org.giving_trend==='growing'?'selected':''}>Growing</option>
+            <option value="flat" ${org.giving_trend==='flat'?'selected':''}>Flat</option>
+            <option value="declining" ${org.giving_trend==='declining'?'selected':''}>Declining</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Boomer dependency risk</label>
+          <select class="form-select" id="sc-boomer">
+            <option value="unknown" ${org.boomer_dependency_risk==='unknown'||!org.boomer_dependency_risk?'selected':''}>Unknown</option>
+            <option value="high" ${org.boomer_dependency_risk==='high'?'selected':''}>High</option>
+            <option value="medium" ${org.boomer_dependency_risk==='medium'?'selected':''}>Medium</option>
+            <option value="low" ${org.boomer_dependency_risk==='low'?'selected':''}>Low</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Additional notes</label>
+        <textarea class="form-textarea" id="sc-notes" style="min-height:60px;">${org.notes || ''}</textarea>
+      </div>
+      <div class="btn-row">
+        <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+        <button class="btn-primary" onclick="saveScene()">Save scene →</button>
+      </div>`;
+  }
+
+  if (type === 'log-touch') {
+    content.innerHTML = `
+      <button class="panel-close" onclick="closePanel()">✕ Close</button>
+      <div class="panel-title">Log a Touch</div>
+      <div class="panel-sub">ADD TO THE TIMELINE</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Channel</label>
+          <select class="form-select" id="f-channel">
+            <option value="email">Email</option>
+            <option value="call_manual">Call (manual)</option>
+            <option value="gong">Gong transcript</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="meeting">Meeting</option>
+            <option value="proposal">Proposal sent</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Outcome</label>
+          <select class="form-select" id="f-outcome">
+            <option value="positive">Positive</option>
+            <option value="neutral">Neutral</option>
+            <option value="negative">Negative</option>
+            <option value="no_response">No response</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Subject / topic</label>
+        <input class="form-input" id="f-subject" placeholder="e.g. Follow up on proposal sent last week">
+      </div>
+      <div class="form-group"><label class="form-label">Paste content (email, Gong transcript, call notes)</label>
+        <textarea class="form-textarea" id="f-raw" style="min-height:120px;" placeholder="Paste the email thread, Gong transcript, or your call notes here. The Detective will extract intel automatically."></textarea>
+      </div>
+      <div class="form-group"><label class="form-label">Next step</label>
+        <input class="form-input" id="f-next-step" placeholder="e.g. Send case study to Haylee by Friday">
+      </div>
+      <div class="btn-row">
+        <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+        <button class="btn-primary" onclick="saveTouch()">Log touch + extract intel →</button>
+      </div>`;
+  }
+
+  if (type === 'add-contact') {
+    content.innerHTML = `
+      <button class="panel-close" onclick="closePanel()">✕ Close</button>
+      <div class="panel-title">Add to the Board</div>
+      <div class="panel-sub">SUSPECT INTAKE // ADD CONTACT</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">First name</label><input class="form-input" id="f-first" placeholder="Haylee"></div>
+        <div class="form-group"><label class="form-label">Last name</label><input class="form-input" id="f-last" placeholder="Uzzell"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="f-title" placeholder="Director of Development"></div>
+        <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="f-email" type="email" placeholder="h.uzzell@cbn.com"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Role in deal</label>
+          <select class="form-select" id="f-role">
+            <option value="unknown">Unknown</option>
+            <option value="champion">Champion</option>
+            <option value="economic_buyer">Economic buyer</option>
+            <option value="technical_evaluator">Technical evaluator</option>
+            <option value="end_user">End user</option>
+            <option value="influencer">Influencer</option>
+            <option value="blocker">Blocker</option>
+            <option value="placeholder">Placeholder (TBD)</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Sentiment</label>
+          <select class="form-select" id="f-sentiment">
+            <option value="unknown">Unknown</option>
+            <option value="supporter">Supporter</option>
+            <option value="neutral">Neutral</option>
+            <option value="skeptical">Skeptical</option>
+            <option value="blocker">Blocker</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">What do they care about? (persona notes)</label>
+        <textarea class="form-textarea" id="f-persona" placeholder="What are their personal goals, fears, and motivations? What do they gain if this deal happens?"></textarea>
+      </div>
+      <div class="btn-row">
+        <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+        <button class="btn-primary" onclick="saveContact()">Pin to board →</button>
+      </div>`;
+  }
+}
+
+function closePanel() {
+  document.getElementById('panel-overlay').classList.remove('open');
+}
+function closePanelOnOverlay(e) {
+  if (e.target === document.getElementById('panel-overlay')) closePanel();
+}
+
+// ── SAVE FUNCTIONS ──
+async function saveNewDeal() {
+  const orgName = document.getElementById('f-org-name').value.trim();
+  const dealName = document.getElementById('f-deal-name').value.trim();
+  if (!orgName || !dealName) return alert('Organization name and deal name are required.');
+
+  const locationStr = document.getElementById('f-location').value;
+  const [city, state] = locationStr.split(',').map(s => s.trim());
+
+  const { data: org } = await sb.from('orgs').insert({
+    name: orgName,
+    industry: document.getElementById('f-industry').value || null,
+    location_city: city || null,
+    location_state: state || null,
+    mission_pressure: document.getElementById('f-mission').value || null,
+  }).select().single();
+
+  if (!org) return alert('Error creating organization.');
+
+  const arr = parseInt(document.getElementById('f-arr').value) || null;
+  await sb.from('deals').insert({
+    org_id: org.id,
+    deal_name: dealName,
+    stage: document.getElementById('f-stage').value || 'prospecting',
+    arr_estimate: arr,
+    health_label: 'unknown',
+  });
+
+  closePanel();
+  await loadPipeline();
+}
+
+async function saveContact() {
+  if (!currentDeal) return;
+  const first = document.getElementById('f-first').value.trim();
+  const role = document.getElementById('f-role').value;
+  if (!first && role !== 'placeholder') return alert('First name is required.');
+
+  await sb.from('contacts').insert({
+    deal_id: currentDeal.id,
+    org_id: currentDeal.org_id,
+    first_name: first || null,
+    last_name: document.getElementById('f-last').value.trim() || null,
+    title: document.getElementById('f-title').value.trim() || null,
+    email: document.getElementById('f-email').value.trim() || null,
+    deal_role: role,
+    sentiment: document.getElementById('f-sentiment').value,
+    persona_notes: document.getElementById('f-persona').value || null,
+  });
+
+  closePanel();
+  await openCase(currentDeal.id);
+}
+
+async function saveTouch() {
+  if (!currentDeal) return;
+  const channel = document.getElementById('f-channel').value;
+  const raw = document.getElementById('f-raw').value;
+  const subject = document.getElementById('f-subject').value;
+
+  await sb.from('interactions').insert({
+    deal_id: currentDeal.id,
+    channel,
+    raw_content: raw || null,
+    subject: subject || null,
+    outcome: document.getElementById('f-outcome').value,
+    next_step: document.getElementById('f-next-step').value || null,
+    occurred_at: new Date().toISOString(),
+  });
+
+  // Update touch count
+  await sb.from('deals').update({
+    total_touches: (currentDeal.total_touches || 0) + 1,
+    last_touch_date: new Date().toISOString(),
+    last_touch_channel: channel,
+  }).eq('id', currentDeal.id);
+
+  closePanel();
+
+  // If there's content, ask detective to analyze it
+  if (raw) {
+    await openCase(currentDeal.id);
+    askDetective(`I just logged a ${channel} touch. Here's what was said: ${raw.substring(0, 500)}. What new intel can you extract and what should be my next move?`);
+  } else {
+    await openCase(currentDeal.id);
+  }
+}
+
+// ── LAYER EDIT ──
+function openEditLayer(fieldKey, fieldName, el) {
+  const deal = currentDeal;
+  const currentVal = deal[fieldKey] || '';
+  const placeholders = {
+    deal_mission_context: 'What is this org trying to accomplish right now? What burning platform are they on?',
+    buying_process_notes: 'How do they actually make decisions? Who signs off? Does a committee meet?',
+    success_definition: 'What does winning look like specifically for FreeWill? What measurable outcome have they articulated?',
+    decision_maker_fears: "What keeps the decision maker up at night? Giving down? Losing Boomers? Board pressure?",
+  };
+  const overlay = document.getElementById('panel-overlay');
+  const content = document.getElementById('panel-content');
+  overlay.classList.add('open');
+  content.innerHTML = `
+    <button class="panel-close" onclick="closePanel()">✕ Close</button>
+    <div class="panel-title">${fieldName}</div>
+    <div class="panel-sub">CASE FILE // INTELLIGENCE LAYER</div>
+    <div class="form-group">
+      <label class="form-label">${fieldName}</label>
+      <textarea class="form-textarea" id="layer-val" style="min-height:140px;" placeholder="${placeholders[fieldKey] || ''}">${currentVal}</textarea>
+    </div>
+    <div style="padding:10px 12px; background:rgba(243,156,18,0.06); border:1px solid rgba(243,156,18,0.15); border-radius:3px; margin-bottom:16px;">
+      <div style="font-family:var(--mono);font-size:9px;color:var(--amber);letter-spacing:0.1em;margin-bottom:4px;">DETECTIVE TIP</div>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.6;">${getLayerTip(fieldKey)}</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+      <button class="btn-primary" onclick="saveLayer('${fieldKey}')">Save intel →</button>
+    </div>`;
+}
+
+function getLayerTip(key) {
+  const tips = {
+    deal_mission_context: 'This is not about FreeWill. What is the org chasing right now independently? Their annual report, recent sermon series, job postings, and press releases will tell you.',
+    buying_process_notes: 'The formal process and the real process are almost never the same. Who has actually blocked purchases here before? Does an elder board, finance committee, or single leader make calls?',
+    success_definition: 'If you cannot define success in their language, your champion cannot sell internally. Get specific: a number, a timeline, a measurable outcome.',
+    decision_maker_fears: 'This is the emotional engine of the deal. Name their fear before they do and you become a trusted advisor, not a vendor.',
+  };
+  return tips[key] || '';
+}
+
+async function saveLayer(fieldKey) {
+  const val = document.getElementById('layer-val').value.trim();
+  await sb.from('deals').update({ [fieldKey]: val || null }).eq('id', currentDeal.id);
+  currentDeal[fieldKey] = val || null;
+  closePanel();
+  await openCase(currentDeal.id);
+}
+
+async function saveScene() {
+  const org = currentDeal?.orgs;
+  if (!org) return;
+  await sb.from('orgs').update({
+    name: document.getElementById('sc-name').value.trim() || org.name,
+    website: document.getElementById('sc-website').value.trim() || null,
+    location_city: document.getElementById('sc-city').value.trim() || null,
+    location_state: document.getElementById('sc-state').value.trim() || null,
+    mission_pressure: document.getElementById('sc-mission').value.trim() || null,
+    giving_trend: document.getElementById('sc-giving').value,
+    boomer_dependency_risk: document.getElementById('sc-boomer').value,
+    notes: document.getElementById('sc-notes').value.trim() || null,
+  }).eq('id', org.id);
+  closePanel();
+  await openCase(currentDeal.id);
+}
+
+
+// ── GONG TRANSCRIPT ANALYSIS ──
+function openGongPanel() {
+  if (!currentDeal) return alert('Open a case first.');
+  const overlay = document.getElementById('panel-overlay');
+  const panel = document.getElementById('panel-content');
+  overlay.classList.add('open');
+  panel.innerHTML = `
+    <button class="panel-close" onclick="closePanel()">✕ Close</button>
+    <div class="panel-title" style="color:#a569bd;">🎙 Gong Transcript Analysis</div>
+    <div class="panel-sub">FORENSICS LAB // EXTRACT INTEL FROM CALL</div>
+    <div class="form-group">
+      <label class="form-label">Paste Gong transcript</label>
+      <textarea class="form-textarea" id="gong-raw" style="min-height:200px; font-family:var(--mono); font-size:11px;" placeholder="Paste the full Gong call transcript here...
+
+The Detective will extract:
+• New stakeholders mentioned
+• Buying signals and objections  
+• Updates to the five intelligence layers
+• Champion engagement signals
+• Red flags
+• Recommended next move"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Call date</label>
+        <input class="form-input" id="gong-date" type="date" value="${new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Duration (minutes)</label>
+        <input class="form-input" id="gong-duration" type="number" placeholder="30">
+      </div>
+    </div>
+    <div id="gong-analysis-area" style="display:none;">
+      <div style="border-top:1px solid #3d2e1a; margin:16px 0;"></div>
+      <div style="font-family:var(--mono);font-size:9px;color:#a569bd;letter-spacing:0.15em;margin-bottom:12px;">DETECTIVE ANALYSIS</div>
+      <div id="gong-result" style="font-size:12px;color:var(--paper);line-height:1.8;"></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+      <button class="btn-primary" id="gong-analyze-btn" style="background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;" onclick="analyzeGongTranscript()">Analyze transcript →</button>
+    </div>`;
+}
+
+async function analyzeGongTranscript() {
+  const raw = document.getElementById('gong-raw').value.trim();
+  if (!raw) return alert('Paste a transcript first.');
+  if (raw.length < 100) return alert('Transcript seems too short. Paste the full call.');
+
+  const btn = document.getElementById('gong-analyze-btn');
+  btn.textContent = 'Detective is reading...';
+  btn.disabled = true;
+
+  const deal = currentDeal;
+  const { contacts, gaps } = currentDealData;
+
+  const systemPrompt = `You are The Detective — a sharp sales intelligence analyst for Tim's Situation Room. Tim sells FreeWill, a planned giving platform for nonprofits and faith-based organizations.
+
+Analyze this Gong call transcript and return a JSON object ONLY with no markdown, no explanation, just raw JSON with these exact keys:
+
+{
+  "call_summary": "2-3 sentence plain English summary of what happened on the call",
+  "outcome": "positive|neutral|negative|no_response",
+  "sentiment_shift": "Brief note on whether prospect sentiment improved, declined or stayed same",
+  "new_stakeholders": [{"name": "...", "title": "...", "role_guess": "champion|economic_buyer|technical_evaluator|influencer|blocker|unknown", "notes": "..."}],
+  "intel_layers": {
+    "mission_pressure": "New intel learned about what org is trying to accomplish, or null",
+    "buying_process": "New intel about how they make decisions, or null", 
+    "success_definition": "What success looks like to them specifically for FreeWill, or null",
+    "decision_maker_fears": "What fears or concerns surfaced, or null"
+  },
+  "buying_signals": ["list of positive buying signals heard"],
+  "objections": ["list of objections or concerns raised"],
+  "champion_signals": "Assessment of champion strength based on this call",
+  "red_flags": ["list of concerning signals"],
+  "next_move": "The single most important next action Tim should take based on this call",
+  "next_move_reasoning": "Why this is the right move",
+  "gaps_addressed": ["any existing gaps this call helped resolve"],
+  "new_gaps": ["any new gaps this call revealed"]
+}
+
+Current deal context:
+- Deal: ${deal?.deal_name}
+- Org: ${deal?.orgs?.name}
+- Stage: ${deal?.stage}
+- Known contacts: ${(contacts||[]).map(c => [c.first_name, c.last_name].filter(Boolean).join(' ') + ' (' + c.deal_role + ')').join(', ') || 'none'}
+- Open gaps: ${(gaps||[]).map(g => g.gap_label).join(', ') || 'none'}`;
+
+  try {
+    const response = await fetch('https://super-feather-7243.timothy-0ee.workers.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: "Analyze this transcript:\n\n" + raw.substring(0, 8000) }]
+      })
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || '{}';
+    let analysis;
+    try {
+      analysis = JSON.parse(text.replace(/```json|```/g, '').trim());
+    } catch(e) {
+      analysis = { call_summary: text, outcome: 'neutral', next_move: 'Review transcript manually' };
+    }
+
+    // Save the interaction to Supabase
+    const date = document.getElementById('gong-date').value;
+    const duration = parseInt(document.getElementById('gong-duration').value) || null;
+    await sb.from('interactions').insert({
+      deal_id: deal.id,
+      channel: 'gong',
+      direction: 'both',
+      occurred_at: date ? new Date(date).toISOString() : new Date().toISOString(),
+      raw_content: raw,
+      subject: 'Gong call — ' + (deal?.orgs?.name || deal.deal_name),
+      ai_summary: analysis.call_summary,
+      ai_sentiment_shift: analysis.sentiment_shift,
+      ai_new_intel: JSON.stringify(analysis.intel_layers),
+      ai_new_stakeholders_mentioned: analysis.new_stakeholders?.length ? JSON.stringify(analysis.new_stakeholders) : null,
+      ai_red_flags: analysis.red_flags?.length ? analysis.red_flags.join('; ') : null,
+      ai_suggested_next_move: analysis.next_move,
+      outcome: analysis.outcome,
+      next_step: analysis.next_move,
+      call_duration_minutes: duration,
+    });
+
+    // Update touch count
+    await sb.from('deals').update({
+      total_touches: (deal.total_touches || 0) + 1,
+      last_touch_date: new Date().toISOString(),
+      last_touch_channel: 'gong',
+    }).eq('id', deal.id);
+
+    // Update intel layers if new info found
+    const layerUpdates = {};
+    if (analysis.intel_layers?.mission_pressure && !deal.deal_mission_context) layerUpdates.deal_mission_context = analysis.intel_layers.mission_pressure;
+    if (analysis.intel_layers?.buying_process && !deal.buying_process_notes) layerUpdates.buying_process_notes = analysis.intel_layers.buying_process;
+    if (analysis.intel_layers?.success_definition && !deal.success_definition) layerUpdates.success_definition = analysis.intel_layers.success_definition;
+    if (analysis.intel_layers?.decision_maker_fears && !deal.decision_maker_fears) layerUpdates.decision_maker_fears = analysis.intel_layers.decision_maker_fears;
+    if (Object.keys(layerUpdates).length > 0) {
+      await sb.from('deals').update(layerUpdates).eq('id', deal.id);
+    }
+
+    // Auto-create placeholder contacts for new stakeholders
+    for (const ns of (analysis.new_stakeholders || [])) {
+      const nameParts = (ns.name || '').split(' ');
+      const alreadyExists = (contacts||[]).some(c => 
+        c.first_name?.toLowerCase() === (nameParts[0]||'').toLowerCase()
+      );
+      if (!alreadyExists && ns.name && ns.name !== 'Unknown') {
+        await sb.from('contacts').insert({
+          deal_id: deal.id,
+          org_id: deal.org_id,
+          first_name: nameParts[0] || null,
+          last_name: nameParts.slice(1).join(' ') || null,
+          title: ns.title || null,
+          deal_role: ns.role_guess || 'unknown',
+          persona_notes: ns.notes || null,
+        });
+      }
+    }
+
+    // Render results
+    document.getElementById('gong-analysis-area').style.display = 'block';
+    const resultEl = document.getElementById('gong-result');
+
+    const outcomeColor = { positive: '#27ae60', neutral: '#f39c12', negative: '#e74c3c', no_response: '#7f8c8d' };
+    const oc = outcomeColor[analysis.outcome] || '#f39c12';
+
+    resultEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <div style="width:8px;height:8px;border-radius:50%;background:${oc};"></div>
+        <span style="font-family:var(--mono);font-size:10px;color:${oc};text-transform:uppercase;letter-spacing:0.1em;">${analysis.outcome?.replace('_',' ')}</span>
+      </div>
+      <p style="margin-bottom:12px;">${analysis.call_summary || ''}</p>
+      ${analysis.buying_signals?.length ? `<div style="margin-bottom:10px;"><div style="font-family:var(--mono);font-size:9px;color:#27ae60;letter-spacing:0.1em;margin-bottom:4px;">BUYING SIGNALS</div>${analysis.buying_signals.map(s => `<div style="padding:3px 0;color:#a8e6bf;">→ ${s}</div>`).join('')}</div>` : ''}
+      ${analysis.objections?.length ? `<div style="margin-bottom:10px;"><div style="font-family:var(--mono);font-size:9px;color:#e67e22;letter-spacing:0.1em;margin-bottom:4px;">OBJECTIONS</div>${analysis.objections.map(o => `<div style="padding:3px 0;color:#f0b27a;">⚠ ${o}</div>`).join('')}</div>` : ''}
+      ${analysis.red_flags?.length ? `<div style="margin-bottom:10px;"><div style="font-family:var(--mono);font-size:9px;color:#e74c3c;letter-spacing:0.1em;margin-bottom:4px;">RED FLAGS</div>${analysis.red_flags.map(r => `<div style="padding:3px 0;color:#f1948a;">⚑ ${r}</div>`).join('')}</div>` : ''}
+      ${analysis.new_stakeholders?.length ? `<div style="margin-bottom:10px;"><div style="font-family:var(--mono);font-size:9px;color:#a569bd;letter-spacing:0.1em;margin-bottom:4px;">NEW PEOPLE IDENTIFIED</div>${analysis.new_stakeholders.map(s => `<div style="padding:3px 0;color:#d2b4de;">+ ${s.name} — ${s.title || 'title unknown'} (${s.role_guess})</div>`).join('')}</div>` : ''}
+      <div style="margin-top:14px;padding:10px 12px;background:rgba(243,156,18,0.08);border:1px solid rgba(243,156,18,0.2);border-radius:3px;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--amber);letter-spacing:0.1em;margin-bottom:4px;">NEXT MOVE</div>
+        <div style="font-weight:500;">${analysis.next_move || ''}</div>
+        ${analysis.next_move_reasoning ? `<div style="color:var(--text-dim);margin-top:4px;font-size:11px;">${analysis.next_move_reasoning}</div>` : ''}
+      </div>
+      ${Object.values(layerUpdates).length ? `<div style="margin-top:10px;font-family:var(--mono);font-size:9px;color:#27ae60;letter-spacing:0.08em;">✓ Case file updated with new intel from this call</div>` : ''}
+      ${analysis.new_stakeholders?.length ? `<div style="margin-top:4px;font-family:var(--mono);font-size:9px;color:#a569bd;letter-spacing:0.08em;">✓ ${analysis.new_stakeholders.length} new contact(s) added to the board</div>` : ''}
+    `;
+
+    btn.textContent = 'Analyzed ✓';
+    btn.style.color = '#27ae60';
+    btn.style.borderColor = '#1e8449';
+
+    // Reload the board in background
+    setTimeout(() => openCase(deal.id), 1500);
+
+  } catch(err) {
+    btn.textContent = 'Analyze transcript →';
+    btn.disabled = false;
+    alert('Analysis failed. Check your connection and try again.');
+    console.error(err);
+  }
+}
+
+// ── EDIT CONTACT ──
+async function openEditContact(contactId) {
+  const { data: c } = await sb.from('contacts').select('*').eq('id', contactId).single();
+  if (!c) return;
+  const overlay = document.getElementById('panel-overlay');
+  const content = document.getElementById('panel-content');
+  overlay.classList.add('open');
+  content.innerHTML = `
+    <button class="panel-close" onclick="closePanel()">✕ Close</button>
+    <div class="panel-title">Edit Contact</div>
+    <div class="panel-sub">UPDATE SUSPECT FILE</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">First name</label><input class="form-input" id="ef-first" value="${c.first_name || ''}"></div>
+      <div class="form-group"><label class="form-label">Last name</label><input class="form-input" id="ef-last" value="${c.last_name || ''}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="ef-title" value="${c.title || ''}"></div>
+      <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ef-email" value="${c.email || ''}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Role in deal</label>
+        <select class="form-select" id="ef-role">
+          <option value="unknown" ${c.deal_role==='unknown'?'selected':''}>Unknown</option>
+          <option value="champion" ${c.deal_role==='champion'?'selected':''}>Champion</option>
+          <option value="economic_buyer" ${c.deal_role==='economic_buyer'?'selected':''}>Economic buyer</option>
+          <option value="technical_evaluator" ${c.deal_role==='technical_evaluator'?'selected':''}>Technical evaluator</option>
+          <option value="end_user" ${c.deal_role==='end_user'?'selected':''}>End user</option>
+          <option value="influencer" ${c.deal_role==='influencer'?'selected':''}>Influencer</option>
+          <option value="blocker" ${c.deal_role==='blocker'?'selected':''}>Blocker</option>
+          <option value="placeholder" ${c.deal_role==='placeholder'?'selected':''}>Placeholder (TBD)</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Sentiment</label>
+        <select class="form-select" id="ef-sentiment">
+          <option value="unknown" ${c.sentiment==='unknown'?'selected':''}>Unknown</option>
+          <option value="supporter" ${c.sentiment==='supporter'?'selected':''}>Supporter</option>
+          <option value="neutral" ${c.sentiment==='neutral'?'selected':''}>Neutral</option>
+          <option value="skeptical" ${c.sentiment==='skeptical'?'selected':''}>Skeptical</option>
+          <option value="blocker" ${c.sentiment==='blocker'?'selected':''}>Blocker</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Engagement trend</label>
+        <select class="form-select" id="ef-engagement">
+          <option value="unknown" ${c.engagement_trend==='unknown'?'selected':''}>Unknown</option>
+          <option value="increasing" ${c.engagement_trend==='increasing'?'selected':''}>Increasing</option>
+          <option value="stable" ${c.engagement_trend==='stable'?'selected':''}>Stable</option>
+          <option value="declining" ${c.engagement_trend==='declining'?'selected':''}>Declining</option>
+          <option value="dark" ${c.engagement_trend==='dark'?'selected':''}>Gone dark</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Can mobilize internally?</label>
+        <select class="form-select" id="ef-mobilize">
+          <option value="" ${c.can_mobilize_internally===null?'selected':''}>Unknown</option>
+          <option value="true" ${c.can_mobilize_internally===true?'selected':''}>Yes</option>
+          <option value="false" ${c.can_mobilize_internally===false?'selected':''}>No</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Persona notes (what do they care about, fear, stand to gain?)</label>
+      <textarea class="form-textarea" id="ef-persona">${c.persona_notes || ''}</textarea>
+    </div>
+    <div class="form-group"><label class="form-label">Personal stake (what do they gain if this deal happens?)</label>
+      <textarea class="form-textarea" id="ef-stake" style="min-height:60px;">${c.personal_stake || ''}</textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn-ghost" style="color:#c0392b;border-color:#7a1a10;" onclick="deleteContact('${c.id}')">Remove from board</button>
+      <button class="btn-ghost" onclick="closePanel()">Cancel</button>
+      <button class="btn-primary" onclick="saveEditContact('${c.id}')">Save changes →</button>
+    </div>`;
+}
+
+async function saveEditContact(contactId) {
+  const mobilizeVal = document.getElementById('ef-mobilize').value;
+  await sb.from('contacts').update({
+    first_name: document.getElementById('ef-first').value.trim() || null,
+    last_name: document.getElementById('ef-last').value.trim() || null,
+    title: document.getElementById('ef-title').value.trim() || null,
+    email: document.getElementById('ef-email').value.trim() || null,
+    deal_role: document.getElementById('ef-role').value,
+    sentiment: document.getElementById('ef-sentiment').value,
+    engagement_trend: document.getElementById('ef-engagement').value,
+    can_mobilize_internally: mobilizeVal === '' ? null : mobilizeVal === 'true',
+    persona_notes: document.getElementById('ef-persona').value || null,
+    personal_stake: document.getElementById('ef-stake').value || null,
+  }).eq('id', contactId);
+  closePanel();
+  await openCase(currentDeal.id);
+}
+
+async function deleteContact(contactId) {
+  if (!confirm('Remove this contact from the board?')) return;
+  await sb.from('contacts').delete().eq('id', contactId);
+  closePanel();
+  await openCase(currentDeal.id);
+}
+
+// ── DETECTIVE CHAT ──
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function sendQuickPrompt(btn) {
+  document.getElementById('chat-input').value = btn.textContent;
+  sendMessage();
+}
+
+function askDetective(question) {
+  document.getElementById('chat-input').value = question;
+  sendMessage();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  addMessage('user', text);
+  chatHistory.push({ role: 'user', content: text });
+
+  const thinkingId = addThinking();
+
+  // Build context about the current deal
+  const deal = currentDeal;
+  const { contacts, interactions, gaps, news } = currentDealData;
+
+  const systemPrompt = `You are The Detective — a sharp, seasoned sales intelligence analyst embedded in Tim's Situation Room. Tim is a Partnership Lead at FreeWill, a planned giving platform for nonprofits and faith-based organizations. You have access to all deal intelligence and think like a detective: pattern recognition, gap identification, next-move prescription.
+
+Current case: ${deal?.deal_name || 'No case open'}
+Org: ${deal?.orgs?.name || '—'} (${deal?.orgs?.industry || '—'})
+Stage: ${deal?.stage || '—'}
+Total touches: ${deal?.total_touches || 0}
+Days since last touch: ${deal?.days_since_last_touch || 0}
+
+Mission pressure: ${deal?.orgs?.mission_pressure || 'Unknown'}
+Buying process: ${deal?.buying_process_notes || 'Unknown'}
+Success definition: ${deal?.success_definition || 'Unknown'}
+Decision maker fears: ${deal?.decision_maker_fears || 'Unknown'}
+
+Contacts on board:
+${(contacts||[]).map(c => `- ${[c.first_name, c.last_name].filter(Boolean).join(' ')} | ${c.title || '—'} | Role: ${c.deal_role} | Sentiment: ${c.sentiment}`).join('\n') || 'No contacts mapped'}
+
+Recent interactions:
+${(interactions||[]).slice(0,4).map(i => `- ${i.channel} on ${new Date(i.occurred_at).toLocaleDateString()} | ${i.ai_summary || i.subject || 'No summary'} | Outcome: ${i.outcome}`).join('\n') || 'No interactions logged'}
+
+Open gaps:
+${(gaps||[]).map(g => `- [${g.severity.toUpperCase()}] ${g.gap_label}: ${g.gap_description || ''}`).join('\n') || 'No gaps flagged'}
+
+Recent news:
+${(news||[]).map(n => `- ${n.title} (${n.source || ''})`).join('\n') || 'No news items'}
+
+Julia (Tim's manager) may also be asking questions. Answer concisely and specifically. When asked to build a sequence, provide concrete steps with channel, timing, and talking points. Think in terms of Sandler selling methodology and MEDDIC. Always reference specific deal data when available. Keep responses under 200 words unless building a sequence.`;
+
+  try {
+    const response = await fetch('https://super-feather-7243.timothy-0ee.workers.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: chatHistory,
+      })
+    });
+
+    const data = await response.json();
+    const reply = data.content?.[0]?.text || 'No response from Detective.';
+
+    removeThinking(thinkingId);
+    addMessage('detective', reply);
+    chatHistory.push({ role: 'assistant', content: reply });
+
+  } catch (err) {
+    removeThinking(thinkingId);
+    addMessage('detective', 'Connection issue. Check your network and try again.');
+  }
+}
+
+function addMessage(from, text) {
+  const msgs = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'chat-message';
+  div.innerHTML = `
+    <div class="msg-from ${from === 'detective' ? 'msg-from-detective' : 'msg-from-user'}">${from === 'detective' ? 'Detective' : 'You'}</div>
+    <div class="msg-bubble ${from === 'detective' ? 'msg-detective-bubble' : 'msg-user-bubble'}">${text.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</div>
+  `;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function addThinking() {
+  const msgs = document.getElementById('chat-messages');
+  const id = 'thinking-' + Date.now();
+  const div = document.createElement('div');
+  div.id = id;
+  div.className = 'chat-message';
+  div.innerHTML = `
+    <div class="msg-from msg-from-detective">Detective</div>
+    <div class="msg-bubble msg-detective-bubble msg-thinking">
+      <div class="thinking-dot"></div>
+      <div class="thinking-dot"></div>
+      <div class="thinking-dot"></div>
+    </div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return id;
+}
+
+function removeThinking(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+// ── WON DEALS UPLOADER ──
+function openWonDealsUploader() {
+  const overlay = document.getElementById('panel-overlay');
+  const panel = document.getElementById('panel-content');
+  overlay.classList.add('open');
+  panel.style.maxWidth = '720px';
+  panel.innerHTML = `
+    <button class="panel-close" onclick="closePanel(); document.getElementById('panel-content').style.maxWidth='';">✕ Close</button>
+    <div class="panel-title" style="color:#a569bd;">📁 Upload Won Deals</div>
+    <div class="panel-sub">CASE HISTORY // PATTERN LIBRARY</div>
+    <div style="padding:10px 12px; background:rgba(142,68,173,0.06); border:1px solid rgba(142,68,173,0.2); border-radius:3px; margin-bottom:16px; font-size:12px; color:var(--text-dim); line-height:1.6;">
+      Paste your Slack won deal announcements, CRM notes, email threads, or any unstructured deal history. The Detective will read everything and extract each deal automatically — org type, champion, what closed it, the breakthrough moment, and the sequence that worked.
+    </div>
+    <div class="form-group">
+      <label class="form-label">Paste won deal history (Slack, CRM notes, emails — any format)</label>
+      <textarea class="form-textarea" id="won-raw" style="min-height:220px; font-family:var(--mono); font-size:11px;" placeholder="Paste your Slack channel history, Salesforce export notes, email threads, or anything else here...
+
+The Detective can handle:
+• Multiple deals in one paste
+• Slack message format
+• CSV-style data  
+• Free-form notes
+• Mixed formats"></textarea>
+    </div>
+    <div id="won-extraction-area" style="display:none;">
+      <div style="border-top:1px solid #3d2e1a; margin:16px 0;"></div>
+      <div style="font-family:var(--mono);font-size:9px;color:#a569bd;letter-spacing:0.15em;margin-bottom:12px;">EXTRACTED DEALS — REVIEW BEFORE SAVING</div>
+      <div id="won-deals-preview"></div>
+    </div>
+    <div id="won-btn-row" class="btn-row">
+      <button class="btn-ghost" onclick="closePanel(); document.getElementById('panel-content').style.maxWidth='';">Cancel</button>
+      <button class="btn-primary" id="won-extract-btn" style="background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;" onclick="extractWonDeals()">Extract deals →</button>
+    </div>`;
+}
+
+async function extractWonDeals() {
+  const raw = document.getElementById('won-raw').value.trim();
+  if (!raw || raw.length < 50) return alert('Paste some deal history first.');
+
+  const btn = document.getElementById('won-extract-btn');
+  btn.textContent = 'Detective is reading...';
+  btn.disabled = true;
+
+  const systemPrompt = `You are The Detective — a sales intelligence analyst for Tim's Situation Room. Tim sells FreeWill, a planned giving platform for nonprofits and faith-based organizations.
+
+Extract ALL won deals from the text provided. Return ONLY a valid JSON array with no markdown, no explanation, just raw JSON.
+
+Each deal object must have these exact keys:
+{
+  "org_name": "Organization name",
+  "org_type": "large_church|mega_church|faith_nonprofit|christian_media|catholic|methodist|healthcare|animal_welfare|youth_org|other",
+  "org_size_category": "small|medium|large|enterprise",
+  "location_state": "state abbreviation or null",
+  "deal_length_days": number or null,
+  "total_touches": number or null,
+  "arr": number or null,
+  "lead_source": "cold_outreach|warm_intro|inbound|referral|event|re_engagement|other",
+  "mission_pressure_at_close": "What the org was trying to accomplish that made them buy",
+  "champion_role": "title/role of the champion who drove the deal internally",
+  "champion_strength": "strong|medium|weak",
+  "economic_buyer_role": "title/role of economic buyer",
+  "stakeholders_involved": ["list of roles/titles involved in decision"],
+  "primary_objection_overcome": "The main objection and how it was resolved, or null",
+  "breakthrough_moment": "The single thing that turned the deal — the key insight, case study, event, or conversation",
+  "breakthrough_channel": "email|call|meeting|referral|case_study|event|other",
+  "winning_sequence_description": "Brief description of what sequence of moves closed this deal",
+  "success_definition": "What success looked like to them — what outcome they were buying",
+  "decision_maker_fears": "What they were afraid of or trying to avoid",
+  "competitive_situation": "Were they ripping out a competitor? Which one? Or greenfield?",
+  "deal_notes": "Any other important context about why this deal closed",
+  "similarity_tags": ["tags like: replaced_crescendo, healthcare, large_org, cold_outreach, re_engagement, board_pressure, federated_deal, case_study_drove_close, etc"]
+}
+
+Extract every deal you can find. If a field is truly unknown, use null. Be thorough — every detail matters for pattern matching future deals.`;
+
+  try {
+    const response = await fetch('https://super-feather-7243.timothy-0ee.workers.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: "Extract all won deals from this text:\n\n" + raw.substring(0, 12000) }]
+      })
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || '[]';
+    let deals;
+    try {
+      deals = JSON.parse(text.replace(/```json|```/g, '').trim());
+      if (!Array.isArray(deals)) deals = [deals];
+    } catch(e) {
+      btn.textContent = 'Extract deals →';
+      btn.disabled = false;
+      return alert('Could not parse deals from that text. Try adding more context or structure.');
+    }
+
+    if (!deals.length) {
+      btn.textContent = 'Extract deals →';
+      btn.disabled = false;
+      return alert('No deals found. Make sure you pasted actual deal history.');
+    }
+
+    // Store extracted deals for saving
+    window._extractedWonDeals = deals;
+
+    // Render preview
+    const previewEl = document.getElementById('won-deals-preview');
+    previewEl.innerHTML = deals.map((d, i) => `
+      <div style="background:rgba(0,0,0,0.25); border:1px solid #3d2e1a; border-radius:3px; padding:14px; margin-bottom:12px; position:relative;">
+        <div style="position:absolute;top:10px;right:10px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="include-deal-${i}" checked style="accent-color:#a569bd;">
+            <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em;">INCLUDE</span>
+          </label>
+        </div>
+        <div style="font-family:var(--serif);font-size:16px;color:var(--paper);margin-bottom:6px;">${d.org_name}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          ${d.arr ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(39,174,96,0.15);color:#27ae60;border-radius:2px;">$${(d.arr/1000).toFixed(0)}k ARR</span>` : ''}
+          ${d.deal_length_days ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(243,156,18,0.1);color:#f39c12;border-radius:2px;">${d.deal_length_days} days</span>` : ''}
+          ${d.org_type ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(139,115,85,0.15);color:var(--text-dim);border-radius:2px;">${d.org_type.replace(/_/g,' ')}</span>` : ''}
+          ${d.lead_source ? `<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(41,128,185,0.15);color:#5dade2;border-radius:2px;">${d.lead_source.replace(/_/g,' ')}</span>` : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
+          ${d.champion_role ? `<div><span style="color:var(--text-dim);">Champion: </span><span style="color:var(--paper);">${d.champion_role}</span></div>` : ''}
+          ${d.economic_buyer_role ? `<div><span style="color:var(--text-dim);">Economic buyer: </span><span style="color:var(--paper);">${d.economic_buyer_role}</span></div>` : ''}
+          ${d.competitive_situation ? `<div style="grid-column:span 2;"><span style="color:var(--text-dim);">Competitive: </span><span style="color:var(--paper);">${d.competitive_situation}</span></div>` : ''}
+        </div>
+        ${d.breakthrough_moment ? `
+          <div style="margin-top:8px;padding:8px 10px;background:rgba(243,156,18,0.06);border-left:2px solid var(--amber-dim);border-radius:0 2px 2px 0;">
+            <div style="font-family:var(--mono);font-size:8px;color:var(--amber-dim);letter-spacing:0.1em;margin-bottom:2px;">BREAKTHROUGH</div>
+            <div style="font-size:11px;color:var(--paper);">${d.breakthrough_moment}</div>
+          </div>` : ''}
+        ${d.primary_objection_overcome ? `
+          <div style="margin-top:6px;font-size:11px;"><span style="color:var(--text-dim);">Objection overcome: </span><span style="color:var(--paper);">${d.primary_objection_overcome}</span></div>` : ''}
+        ${d.similarity_tags?.length ? `
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;">
+            ${d.similarity_tags.map(t => `<span style="font-family:var(--mono);font-size:8px;padding:1px 5px;background:rgba(142,68,173,0.15);color:#a569bd;border-radius:2px;">${t}</span>`).join('')}
+          </div>` : ''}
+      </div>`).join('');
+
+    document.getElementById('won-extraction-area').style.display = 'block';
+
+    // Replace button row
+    document.getElementById('won-btn-row').innerHTML = `
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">${deals.length} deal${deals.length !== 1 ? 's' : ''} extracted</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-ghost" onclick="document.getElementById('won-raw').value=''; document.getElementById('won-extraction-area').style.display='none'; document.getElementById('won-btn-row').innerHTML = '<button class=\'btn-ghost\' onclick=\'closePanel()\'>Cancel</button><button class=\'btn-primary\' id=\'won-extract-btn\' style=\'background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;\' onclick=\'extractWonDeals()\'>Extract deals →</button>';">Paste more</button>
+        <button class="btn-primary" style="background:rgba(39,174,96,0.15);border-color:#1e8449;color:#27ae60;" onclick="saveWonDeals()">Save to pattern library →</button>
+      </div>`;
+
+  } catch(err) {
+    btn.textContent = 'Extract deals →';
+    btn.disabled = false;
+    console.error(err);
+    const errMsg = err?.message || String(err);
+    alert('Analysis error: ' + errMsg);
+    console.error('Full error:', err);
+  }
+}
+
+async function saveWonDeals() {
+  const deals = window._extractedWonDeals || [];
+  if (!deals.length) return;
+
+  const toSave = deals.filter((d, i) => {
+    const checkbox = document.getElementById(`include-deal-${i}`);
+    return checkbox ? checkbox.checked : true;
+  });
+
+  if (!toSave.length) return alert('No deals selected to save.');
+
+  const rows = toSave.map(d => ({
+    org_name: d.org_name,
+    org_type: d.org_type || null,
+    org_size_category: d.org_size_category || null,
+    location_state: d.location_state || null,
+    deal_length_days: d.deal_length_days || null,
+    total_touches: d.total_touches || null,
+    mission_pressure_at_close: d.mission_pressure_at_close || null,
+    champion_role: d.champion_role || null,
+    champion_strength: d.champion_strength || null,
+    economic_buyer_role: d.economic_buyer_role || null,
+    success_definition: d.success_definition || null,
+    primary_fear_addressed: d.decision_maker_fears || null,
+    primary_objection_overcome: d.primary_objection_overcome || null,
+    breakthrough_moment: d.breakthrough_moment || null,
+    breakthrough_channel: d.breakthrough_channel || null,
+    winning_sequence_description: d.winning_sequence_description || null,
+    raw_notes: d.deal_notes || null,
+    similarity_tags: d.similarity_tags || [],
+  }));
+
+  const { error } = await sb.from('won_deals').insert(rows);
+
+  if (error) {
+    console.error(error);
+    return alert('Error saving deals: ' + error.message);
+  }
+
+  const previewEl = document.getElementById('won-deals-preview');
+  previewEl.innerHTML = `
+    <div style="text-align:center;padding:30px 20px;">
+      <div style="font-family:var(--serif);font-size:22px;color:#27ae60;margin-bottom:8px;">✓ ${toSave.length} deal${toSave.length !== 1 ? 's' : ''} saved</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-bottom:20px;">Pattern library updated. The Detective can now match your active deals against this history.</div>
+      <button class="btn-ghost" onclick="closePanel(); document.getElementById('panel-content').style.maxWidth='';">Close</button>
+      <button class="btn-primary" style="margin-left:8px;background:rgba(142,68,173,0.2);border-color:#6c3483;color:#a569bd;" onclick="document.getElementById('won-raw').value=''; document.getElementById('won-extraction-area').style.display='none'; document.getElementById('won-extract-btn') && (document.getElementById('won-extract-btn').textContent='Extract deals →') && (document.getElementById('won-extract-btn').disabled=false); openWonDealsUploader();">Upload more</button>
+    </div>`;
+
+  document.getElementById('won-btn-row').innerHTML = '';
+  window._extractedWonDeals = [];
+}
+
+
+</script>
+</body>
+</html>
